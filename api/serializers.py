@@ -1,8 +1,107 @@
-from rest_framework import serializers
-from django.contrib.auth.models import User
 from django.utils import timezone
-from datetime import timedelta
-from .models import Profile, Car, Booking, Review, GalleryEvent, SupportRequest
+from rest_framework import serializers
+
+from .models import (
+    Booking,
+    Car,
+    CustomUser,
+    GalleryEvent,
+    Profile,
+    Review,
+    SupportRequest,
+)
+
+# ============================================================================
+# AUTHENTICATION SERIALIZERS
+# ============================================================================
+
+class UserRegistrationSerializer(serializers.ModelSerializer):
+    """User registration serializer"""
+    password = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        help_text="Password must be at least 8 characters"
+    )
+    password_confirm = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        help_text="Confirm your password"
+    )
+    
+    class Meta:
+        model = CustomUser
+        fields = ['id', 'email', 'first_name', 'second_name', 'password', 'password_confirm']
+        read_only_fields = ['id']
+    
+    def validate(self, data):
+        """Validate passwords match"""
+        if data['password'] != data.pop('password_confirm'):
+            raise serializers.ValidationError({
+                'password': 'Passwords do not match'
+            })
+        
+        # Check if email already exists
+        if CustomUser.objects.filter(email=data['email']).exists():
+            raise serializers.ValidationError({
+                'email': 'Email already registered'
+            })
+        
+        return data
+    
+    def create(self, validated_data):
+        """Create user with hashed password"""
+        password = validated_data.pop('password')
+        
+        user = CustomUser.objects.create_user(
+            first_name=validated_data['first_name'],
+            second_name=validated_data['second_name'],
+            email=validated_data['email'],
+            password=password
+        )
+        
+        return user
+
+
+class UserLoginSerializer(serializers.Serializer):
+    """User login serializer"""
+    email = serializers.EmailField()
+    password = serializers.CharField(
+        write_only=True,
+        style={'input_type': 'password'}
+    )
+    
+    def validate_email(self, value):
+        """Check if user exists"""
+        if not CustomUser.objects.filter(email=value).exists():
+            raise serializers.ValidationError(
+                'No user found with this email'
+            )
+        return value
+
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    """User detail serializer"""
+    profile = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = CustomUser
+        fields = ['id', 'email', 'first_name', 'second_name', 'is_active', 'profile']
+        read_only_fields = ['id', 'is_active']
+    
+    def get_profile(self, obj):
+        """Get user's profile"""
+        try:
+            profile = obj.profile
+            return {
+                'id': str(profile.id),
+                'role': profile.role,
+                'full_name': profile.full_name,
+                'phone': profile.phone,
+                'total_bookings': profile.total_bookings,
+                'join_date': profile.join_date,
+            }
+        except Profile.DoesNotExist:
+            return None
 
 
 # ============================================================================

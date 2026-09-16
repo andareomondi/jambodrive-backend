@@ -20,12 +20,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
+# TODO: Change this in production! Use environment variables instead.
 SECRET_KEY = 'django-insecure-t5ngo8s5r_!v-c)jr&*dz9^qtia6i!z=6&s@6%5j9md+gnysi^'
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']  # Change to specific hosts in production
 
 
 # Application definition
@@ -38,13 +39,16 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework.authtoken',  # ← Token authentication (built-in with DRF)
     'django_filters',
     'drf_spectacular',
+    'corsheaders',  # ← CORS support for frontend
     'api',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # ← CORS middleware (must be before CommonMiddleware)
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -115,23 +119,138 @@ USE_I18N = True
 USE_TZ = True
 
 
-REST_FRAMEWORK = {
-    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
-    'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend'],
-}
-
-
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Custom User Model
+AUTH_USER_MODEL = 'api.CustomUser'
 
 
-# Email
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
+# ============================================================================
+# REST FRAMEWORK CONFIGURATION
+# ============================================================================
 
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
+REST_FRAMEWORK = {
+    # Authentication Classes - How users authenticate
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',    # Token-based auth
+        'rest_framework.authentication.SessionAuthentication',  # Session auth (browsable API)
+    ],
+    
+    # Permission Classes - What authenticated users can do
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticatedOrReadOnly',
+    ],
+    
+    # Pagination - How to paginate results
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+    
+    # Filtering - Available filtering backends
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
+    
+    # API Schema/Documentation
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    
+    # Throttling - Rate limiting to prevent abuse
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle'
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/hour',      # 100 requests per hour for anonymous users
+        'user': '1000/hour'      # 1000 requests per hour for authenticated users
     },
 }
+
+
+# ============================================================================
+# CORS CONFIGURATION (for frontend integration)
+# ============================================================================
+
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'http://localhost:8000',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:8000',
+    # Add your production frontend domain here
+    # 'https://yourdomain.com',
+]
+
+CORS_ALLOW_CREDENTIALS = True
+
+
+# ============================================================================
+# SPECTACULAR (API DOCUMENTATION) CONFIGURATION
+# ============================================================================
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Cosmara Car Rental API',
+    'DESCRIPTION': 'Car rental management and booking API',
+    'VERSION': '1.0.0',
+    'SERVE_AUTHENTICATION': ['rest_framework.authentication.TokenAuthentication'],
+    'SERVE_PERMISSIONS': ['rest_framework.permissions.AllowAny'],
+}
+
+
+# ============================================================================
+# EMAIL CONFIGURATION (for notifications)
+# ============================================================================
+
+# Development: Print emails to console
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+# Production: Use SMTP
+# EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+# EMAIL_HOST = 'smtp.gmail.com'
+# EMAIL_PORT = 587
+# EMAIL_USE_TLS = True
+# EMAIL_HOST_USER = 'your-email@gmail.com'
+# EMAIL_HOST_PASSWORD = 'your-app-password'
+
+
+# ============================================================================
+# LOGGING CONFIGURATION (optional - uncomment to enable)
+# ============================================================================
+
+# LOGGING = {
+#     'version': 1,
+#     'disable_existing_loggers': False,
+#     'handlers': {
+#         'file': {
+#             'level': 'ERROR',
+#             'class': 'logging.FileHandler',
+#             'filename': BASE_DIR / 'logs' / 'debug.log',
+#         },
+#     },
+#     'root': {
+#         'handlers': ['file'],
+#         'level': 'ERROR',
+#     },
+# }
+
+
+# ============================================================================
+# PRODUCTION SETTINGS (use these when deploying)
+# ============================================================================
+
+# Uncomment these in production:
+
+# DEBUG = False
+# ALLOWED_HOSTS = ['yourdomain.com', 'www.yourdomain.com']
+# SECURE_SSL_REDIRECT = True
+# SESSION_COOKIE_SECURE = True
+# CSRF_COOKIE_SECURE = True
+# SECURE_BROWSER_XSS_FILTER = True
+# SECURE_CONTENT_SECURITY_POLICY = {
+#     'default-src': ("'self'",),
+# }

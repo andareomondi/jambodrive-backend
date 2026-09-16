@@ -1,24 +1,45 @@
-from rest_framework import viewsets, status, permissions
-from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.response import Response
-from rest_framework.filters import SearchFilter, OrderingFilter
-from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Q, Avg
+from django.db.models import Avg
 from django.utils import timezone
-from datetime import timedelta
-
-from .models import Profile, Car, Booking, Review, GalleryEvent, SupportRequest
-from .serializers import (
-    ProfileSerializer, ProfileDetailSerializer,
-    CarSerializer, CarDetailSerializer, CarAvailabilitySerializer,
-    BookingSerializer, BookingDetailSerializer, BookingCreateSerializer,
-    BookingUpdateStatusSerializer, MpesaWebhookSerializer,
-    ReviewSerializer, ReviewCreateSerializer,
-    GalleryEventSerializer,
-    SupportRequestSerializer,
-    CarSearchSerializer
+from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiResponse,
+    extend_schema,
 )
+from rest_framework import permissions, status, viewsets
+from rest_framework.authtoken.models import Token
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.response import Response
 
+from .models import (
+    Booking,
+    Car,
+    CustomUser,
+    GalleryEvent,
+    Profile,
+    Review,
+    SupportRequest,
+)
+from .serializers import (
+    BookingCreateSerializer,
+    BookingDetailSerializer,
+    BookingSerializer,
+    BookingUpdateStatusSerializer,
+    CarAvailabilitySerializer,
+    CarDetailSerializer,
+    CarSearchSerializer,
+    CarSerializer,
+    GalleryEventSerializer,
+    MpesaWebhookSerializer,
+    ProfileDetailSerializer,
+    ProfileSerializer,
+    ReviewCreateSerializer,
+    ReviewSerializer,
+    SupportRequestSerializer,
+    UserLoginSerializer,
+    UserRegistrationSerializer,
+)
 
 # ============================================================================
 # PERMISSIONS
@@ -54,6 +75,182 @@ class IsAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user and request.user.is_authenticated and \
                request.user.profile.role in ['admin', 'super_admin']
+
+
+# ============================================================================
+# AUTHENTICATION VIEWSET
+# ============================================================================
+
+class AuthViewSet(viewsets.ViewSet):
+    """Authentication endpoints"""
+    permission_classes = [permissions.AllowAny]
+    
+    @extend_schema(
+        request=UserRegistrationSerializer,
+        responses={
+            201: OpenApiResponse(
+                description="User registered successfully",
+                examples=[
+                    OpenApiExample(
+                        "Success Response",
+                        value={
+                            "user": {
+                                "id": 1,
+                                "email": "john@example.com",
+                                "first_name": "John",
+                                "second_name": "Doe"
+                            },
+                            "token": "abc123def456xyz789...",
+                            "message": "User registered successfully"
+                        }
+                    )
+                ]
+            ),
+            400: OpenApiResponse(
+                description="Validation error",
+                examples=[
+                    OpenApiExample(
+                        "Error Response",
+                        value={
+                            "email": ["Email already registered"],
+                            "password": ["Passwords do not match"]
+                        }
+                    )
+                ]
+            )
+        },
+        tags=["Authentication"],
+        summary="Register a new user",
+        description="Create a new user account. Requires first_name, second_name, email, password, and password_confirm.",
+    )
+    @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
+    def register(self, request):
+        """
+        Register a new user
+        
+        Expected payload:
+        {
+            "first_name": "John",
+            "second_name": "Doe",
+            "email": "john@example.com",
+            "password": "secure_password",
+            "password_confirm": "secure_password"
+        }
+        """
+        serializer = UserRegistrationSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            token, created = Token.objects.get_or_create(user=user)
+            return Response({
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'second_name': user.second_name,
+                },
+                'token': token.key,
+                'message': 'User registered successfully'
+            }, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @extend_schema(
+        request=UserLoginSerializer,
+        responses={
+            200: OpenApiResponse(
+                description="Login successful",
+                examples=[
+                    OpenApiExample(
+                        "Success Response",
+                        value={
+                            "user": {
+                                "id": 1,
+                                "email": "john@example.com",
+                                "first_name": "John",
+                                "second_name": "Doe",
+                                "profile": {
+                                    "id": "uuid...",
+                                    "role": "customer",
+                                    "full_name": None
+                                }
+                            },
+                            "token": "abc123def456xyz789...",
+                            "message": "Login successful"
+                        }
+                    )
+                ]
+            ),
+            401: OpenApiResponse(
+                description="Authentication failed",
+                examples=[
+                    OpenApiExample(
+                        "Error Response",
+                        value={
+                            "error": "Invalid email or password"
+                        }
+                    )
+                ]
+            )
+        },
+        tags=["Authentication"],
+        summary="Login user",
+        description="Authenticate a user with email and password. Returns authentication token.",
+    )
+    @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
+    def login(self, request):
+        """
+        User login
+        
+        Expected payload:
+        {
+            "email": "john@example.com",
+            "password": "secure_password"
+        }
+        """
+        serializer = UserLoginSerializer(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email']
+            password = serializer.validated_data['password']
+            
+            try:
+                user = CustomUser.objects.get(email=email)
+            except CustomUser.DoesNotExist:
+                return Response(
+                    {'error': 'Invalid email or password'},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            if not user.check_password(password):
+                return Response(
+                    {'error': 'Invalid email or password'},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            if not user.is_active:
+                return Response(
+                    {'error': 'User account is disabled'},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            token, created = Token.objects.get_or_create(user=user)
+            profile = user.profile
+            
+            return Response({
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'second_name': user.second_name,
+                    'profile': {
+                        'id': str(profile.id),
+                        'role': profile.role,
+                        'full_name': profile.full_name,
+                    }
+                },
+                'token': token.key,
+                'message': 'Login successful'
+            }, status=status.HTTP_200_OK)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ============================================================================
@@ -210,10 +407,8 @@ class CarViewSet(viewsets.ModelViewSet):
             'car_id': car_id,
             'pickup_date': pickup,
             'return_date': return_date,
-            'available': not overlapping,
-            'price_per_day': str(car.price),
-            'total_days': (return_date - pickup).days,
-            'estimated_total': str(car.price * (return_date - pickup).days)
+            'is_available': not overlapping,
+            'message': 'Car is available' if not overlapping else 'Car is not available for selected dates'
         })
 
 
@@ -225,10 +420,10 @@ class BookingViewSet(viewsets.ModelViewSet):
     """
     Booking management
     
-    list: User's bookings (or all for admin)
+    list: Get user's bookings (all for admin)
     create: Create new booking
     retrieve: Get booking details
-    update: Update booking (status, notes)
+    update_status: Update booking status (admin only)
     cancel: Cancel booking
     mpesa_callback: Handle M-Pesa webhook
     """
@@ -238,16 +433,15 @@ class BookingViewSet(viewsets.ModelViewSet):
     ordering_fields = ['-created_at', 'pickup_date']
     
     def get_queryset(self):
+        """Filter bookings - admins see all, users see only their own"""
         user = self.request.user
         if user.profile.role in ['admin', 'super_admin']:
             return Booking.objects.all()
-        return user.profile.bookings.all()
+        return Booking.objects.filter(profile=user.profile)
     
     def get_serializer_class(self):
         if self.action == 'create':
             return BookingCreateSerializer
-        elif self.action == 'update_status':
-            return BookingUpdateStatusSerializer
         elif self.action == 'mpesa_callback':
             return MpesaWebhookSerializer
         elif self.action == 'retrieve':
@@ -437,6 +631,103 @@ class SupportRequestViewSet(viewsets.ModelViewSet):
         else:
             permission_classes = [IsAdmin]
         return [permission() for permission in permission_classes]
+
+
+# ============================================================================
+# AUTHENTICATION ENDPOINTS
+# ============================================================================
+
+@extend_schema(
+    request=None,
+    responses={
+        200: OpenApiResponse(
+            description="Logout successful",
+            examples=[
+                OpenApiExample(
+                    "Success Response",
+                    value={"message": "Logout successful"}
+                )
+            ]
+        )
+    },
+    tags=["Authentication"],
+    summary="Logout user",
+    description="Delete user's authentication token and logout.",
+)
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def logout(request):
+    """
+    Logout user - delete token
+    """
+    try:
+        request.user.auth_token.delete()
+        return Response(
+            {'message': 'Logout successful'},
+            status=status.HTTP_200_OK
+        )
+    except:
+        return Response(
+            {'error': 'Logout failed'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+
+@extend_schema(
+    request=None,
+    responses={
+        200: OpenApiResponse(
+            description="Current user details",
+            examples=[
+                OpenApiExample(
+                    "Success Response",
+                    value={
+                        "user": {
+                            "id": 1,
+                            "email": "john@example.com",
+                            "first_name": "John",
+                            "second_name": "Doe",
+                            "is_active": True,
+                            "profile": {
+                                "id": "uuid...",
+                                "role": "customer",
+                                "full_name": None,
+                                "phone": None,
+                                "total_bookings": None
+                            }
+                        }
+                    }
+                )
+            ]
+        )
+    },
+    tags=["Authentication"],
+    summary="Get current user",
+    description="Retrieve currently logged-in user details.",
+)
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def current_user(request):
+    """Get currently logged-in user details"""
+    user = request.user
+    profile = user.profile
+    
+    return Response({
+        'user': {
+            'id': user.id,
+            'email': user.email,
+            'first_name': user.first_name,
+            'second_name': user.second_name,
+            'is_active': user.is_active,
+            'profile': {
+                'id': str(profile.id),
+                'role': profile.role,
+                'full_name': profile.full_name,
+                'phone': profile.phone,
+                'total_bookings': profile.total_bookings,
+            }
+        }
+    }, status=status.HTTP_200_OK)
 
 
 # ============================================================================

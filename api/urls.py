@@ -1,12 +1,18 @@
-from django.urls import path, include
+from django.urls import include, path
+from drf_spectacular.views import (
+    SpectacularAPIView,
+    SpectacularRedocView,
+    SpectacularSwaggerView,
+)
 from rest_framework.routers import DefaultRouter
-from drf_spectacular.views import SpectacularSwaggerView, SpectacularAPIView
+
 from . import views
 
 # Initialize the DefaultRouter
 router = DefaultRouter()
 
 # Register ViewSets - DRF auto-generates CRUD endpoints
+router.register(r'auth', views.AuthViewSet, basename='auth')
 router.register(r'profiles', views.ProfileViewSet, basename='profile')
 router.register(r'cars', views.CarViewSet, basename='car')
 router.register(r'bookings', views.BookingViewSet, basename='booking')
@@ -16,8 +22,12 @@ router.register(r'support', views.SupportRequestViewSet, basename='support-reque
 
 # URL patterns
 urlpatterns = [
-    # API Router endpoints
+    # API Router endpoints (includes auth, profiles, cars, bookings, reviews, gallery, support)
     path('', include(router.urls)),
+    
+    # Additional authentication endpoints
+    path('auth/logout/', views.logout, name='logout'),
+    path('auth/me/', views.current_user, name='current-user'),
     
     # Health check
     path('health/', views.health_check, name='health-check'),
@@ -28,16 +38,23 @@ urlpatterns = [
     # Swagger/OpenAPI documentation
     path('schema/', SpectacularAPIView.as_view(), name='schema'),
     path('docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
     
-    # API authentication
-    path('auth/', include('rest_framework.urls')),
+    # REST framework authentication (browsable API)
+    path('auth/drf/', include('rest_framework.urls')),
 ]
 
 
 # ============================================================================
-# ENDPOINT REFERENCE
+# ENDPOINT REFERENCE - UPDATED
 # ============================================================================
 """
+AUTHENTICATION:
+  POST   /auth/register/              - Register new user
+  POST   /auth/login/                 - Login user (returns token)
+  POST   /auth/logout/                - Logout user (requires token)
+  GET    /auth/me/                    - Get current user profile
+
 PROFILES:
   GET    /profiles/                    - List all profiles
   POST   /profiles/                    - Create profile (admin)
@@ -89,11 +106,12 @@ SUPPORT:
   POST   /support/                     - Submit support request
 
 WEBHOOKS:
-  POST   /bookings/mpesa_callback/    - M-Pesa payment webhook
+  POST   /bookings/mpesa_callback/     - M-Pesa payment webhook
 
 DOCUMENTATION:
   GET    /schema/                      - OpenAPI schema
   GET    /docs/                        - Swagger UI documentation
+  GET    /redoc/                       - ReDoc documentation
   GET    /health/                      - Health check
   GET    /stats/                       - API stats (admin)
 """

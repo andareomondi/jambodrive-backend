@@ -1,9 +1,60 @@
 import uuid
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import (
+    AbstractBaseUser,
+    BaseUserManager,
+    PermissionsMixin,
+)
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models.signals import post_save
+
+
+class CustomUserManager(BaseUserManager):
+    def create_user(self, first_name, second_name, email, password=None):
+        if not email:
+            raise ValueError('User should have a email')
+        if not first_name or not second_name:
+            raise ValueError('User should have a first and second name')
+        user = self.model(
+            first_name=first_name,
+            second_name=second_name,
+            email=email,
+        )
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+
+    def create_superuser(self, first_name, second_name, email, password=None):
+        if not first_name or not second_name:
+            raise ValueError('Superuser should have a first and second name')
+        user = self.create_user(
+            first_name=first_name,
+            second_name=second_name,
+            email=email,
+            password=password,
+        )
+        user.is_admin = True
+        user.is_superuser = True
+        user.is_staff = True
+        user.save(using=self._db)
+        return user
+
+class CustomUser(AbstractBaseUser, PermissionsMixin):
+    first_name = models.CharField(max_length=255)
+    second_name = models.CharField(max_length=255)
+    email = models.EmailField(unique=True)
+    is_active = models.BooleanField(default=True)
+    is_admin = models.BooleanField(default=False)
+    is_superadmin = models.BooleanField(default=False)
+    is_staff = models.BooleanField(default=False)
+
+    objects = CustomUserManager()
+    USERNAME_FIELD = 'email'
+
+
+    def __str__(self):
+        return f'Custom User#{self.id}: {self.first_name} {self.second_name}'
 
 
 class Profile(models.Model):
@@ -17,7 +68,7 @@ class Profile(models.Model):
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='profile')
     full_name = models.CharField(max_length=255, null=True, blank=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='customer')
     total_bookings = models.IntegerField(blank=True, null=True)
@@ -38,7 +89,7 @@ def create_profile(sender, instance, created, **kwargs):
     if created:
         user_profile = Profile(user=instance)
         user_profile.save()
-post_save.connect(create_profile, sender=User)
+post_save.connect(create_profile, sender=CustomUser)
 
 class Car(models.Model):
     """Vehicle inventory"""
