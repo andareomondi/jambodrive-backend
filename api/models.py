@@ -52,6 +52,8 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     objects = CustomUserManager()
     USERNAME_FIELD = 'email'
 
+    REQUIRED_FIELDS = ['first_name', 'second_name']
+
 
     def __str__(self):
         return f'Custom User#{self.id}: {self.first_name} {self.second_name}'
@@ -87,7 +89,8 @@ class Profile(models.Model):
 def create_profile(sender, instance, created, **kwargs):
     """This function aims to connect the user wtih a specific profile which is a one to one connection"""
     if created:
-        user_profile = Profile(user=instance)
+        combined_name = f"{instance.first_name} {instance.second_name}".strip()
+        user_profile = Profile(user=instance, full_name=combined_name)
         user_profile.save()
 post_save.connect(create_profile, sender=CustomUser)
 

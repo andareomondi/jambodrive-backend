@@ -202,8 +202,8 @@ class AuthViewSet(viewsets.ViewSet):
         
         Expected payload:
         {
-            "email": "john@example.com",
-            "password": "secure_password"
+            "email": "shadrackandare@gmail.com",
+            "password": "admin1234"
         }
         """
         serializer = UserLoginSerializer(data=request.data)
