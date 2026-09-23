@@ -27,8 +27,8 @@ from .serializers import (
     BookingSerializer,
     BookingUpdateStatusSerializer,
     CarAvailabilitySerializer,
+    CarCreateUpdateSerializer,
     CarDetailSerializer,
-    CarSearchSerializer,
     CarSerializer,
     GalleryEventSerializer,
     MpesaWebhookSerializer,
@@ -243,7 +243,7 @@ class AuthViewSet(viewsets.ViewSet):
                     'profile': {
                         'id': str(profile.id),
                         'role': profile.role,
-                        'full_name': profile.full_name,
+                        'full_name': profile.full_name
                     }
                 },
                 'token': token.key,
@@ -261,16 +261,16 @@ class ProfileViewSet(viewsets.ModelViewSet):
     """
     Profile management
     
-    list: Get all profiles (public)
+    list: Get all profiles (admin)
     retrieve: Get profile details
-    update: Update own profile or admin update
-    me: Get current user profile
+    update/partial_update: Update own profile
     """
     queryset = Profile.objects.all()
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
-    filter_backends = [SearchFilter, OrderingFilter]
-    search_fields = ['full_name', 'user__email']
-    ordering_fields = ['join_date', 'total_bookings']
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['role']
+    search_fields = ['full_name', 'user__email', 'phone']
+    ordering_fields = ['-join_date', 'full_name']
     
     def get_serializer_class(self):
         if self.action == 'retrieve':
@@ -278,36 +278,17 @@ class ProfileViewSet(viewsets.ModelViewSet):
         return ProfileSerializer
     
     def get_permissions(self):
-        if self.action in ['update', 'partial_update']:
-            permission_classes = [IsProfileOwnerOrAdmin]
-        elif self.action == 'destroy':
+        if self.action == 'list':
             permission_classes = [IsAdmin]
         else:
-            permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+            permission_classes = [permissions.IsAuthenticated]
         return [permission() for permission in permission_classes]
     
-    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
-    def me(self, request):
-        """Get current user's profile"""
-        profile = request.user.profile
-        serializer = self.get_serializer(profile)
-        return Response(serializer.data)
-    
-    @action(detail=True, methods=['get'])
-    def bookings(self, request, pk=None):
-        """Get user's booking history"""
-        profile = self.get_object()
-        bookings = profile.bookings.all()
-        serializer = BookingSerializer(bookings, many=True)
-        return Response(serializer.data)
-    
-    @action(detail=True, methods=['get'])
-    def reviews(self, request, pk=None):
-        """Get user's reviews"""
-        profile = self.get_object()
-        reviews = profile.reviews.all()
-        serializer = ReviewSerializer(reviews, many=True)
-        return Response(serializer.data)
+    def get_object(self):
+        """Return current user's profile if no pk provided"""
+        if self.kwargs.get('pk') == 'me':
+            return self.request.user.profile
+        return super().get_object()
 
 
 # ============================================================================
@@ -316,75 +297,44 @@ class ProfileViewSet(viewsets.ModelViewSet):
 
 class CarViewSet(viewsets.ModelViewSet):
     """
-    Car inventory management: BackBone of the whole project
+    Car management
     
-    list: Browse available cars with filters
-    retrieve: Get car details with reviews
+    list: Browse available cars
+    retrieve: Get car details with images and reviews
     create/update/destroy: Admin only
-    search: Advanced search with date range
-    availability: Check availability for dates
     """
     queryset = Car.objects.all()
     permission_classes = [IsAdminOrReadOnly]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['car_type', 'fuel', 'transmission', 'seats', 'chauffered']
+    filterset_fields = ['car_type', 'transmission', 'fuel', 'available']
     search_fields = ['name', 'model', 'description']
-    ordering_fields = ['price', 'rating', 'year']
+    ordering_fields = ['price', 'rating', 'year', 'name']
     
     def get_serializer_class(self):
         if self.action == 'retrieve':
             return CarDetailSerializer
+        elif self.action in ['create', 'update', 'partial_update']:
+            return CarCreateUpdateSerializer
         return CarSerializer
     
-    @action(detail=False, methods=['post'])
-    def search(self, request):
-        """Advanced car search"""
-        serializer = CarSearchSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+    def get_queryset(self):
+        """Filter available cars for non-admin users"""
+        queryset = Car.objects.all()
         
-        cars = self.get_queryset()
+        if not (self.request.user and self.request.user.is_authenticated and 
+                self.request.user.profile.role in ['admin', 'super_admin']):
+            queryset = queryset.filter(available=True)
         
-        # Filter by car type
-        if 'car_type' in serializer.validated_data:
-            cars = cars.filter(car_type=serializer.validated_data['car_type'])
-        
-        # Filter by max price
-        if 'max_price' in serializer.validated_data:
-            cars = cars.filter(price__lte=serializer.validated_data['max_price'])
-        
-        # Filter by fuel type
-        if 'fuel_type' in serializer.validated_data:
-            cars = cars.filter(fuel=serializer.validated_data['fuel_type'])
-        
-        # Filter by seats
-        if 'seats' in serializer.validated_data:
-            cars = cars.filter(seats__gte=serializer.validated_data['seats'])
-
-        # Filter by availability for dates
-        if 'pickup_date' in serializer.validated_data:
-            pickup = serializer.validated_data['pickup_date']
-            return_date = serializer.validated_data['return_date']
-            
-            # Exclude cars with overlapping bookings
-            unavailable_cars = Booking.objects.filter(
-                status__in=['confirmed', 'completed'],
-                pickup_date__lt=return_date,
-                return_date__gt=pickup
-            ).values_list('car_id', flat=True)
-            
-            cars = cars.exclude(id__in=unavailable_cars)
-        
-        serializer = self.get_serializer(cars, many=True)
-        return Response(serializer.data)
+        return queryset
     
     @action(detail=False, methods=['post'])
-    def availability(self, request):
-        """Check car availability for a date range"""
+    def check_availability(self, request):
+        """Check if car is available for date range"""
         serializer = CarAvailabilitySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         car_id = serializer.validated_data['car_id']
-        pickup = serializer.validated_data['pickup_date']
+        pickup_date = serializer.validated_data['pickup_date']
         return_date = serializer.validated_data['return_date']
         
         try:
@@ -400,16 +350,42 @@ class CarViewSet(viewsets.ModelViewSet):
             car=car,
             status__in=['confirmed', 'completed'],
             pickup_date__lt=return_date,
-            return_date__gt=pickup
+            return_date__gt=pickup_date
         ).exists()
         
         return Response({
             'car_id': car_id,
-            'pickup_date': pickup,
+            'available': not overlapping,
+            'pickup_date': pickup_date,
             'return_date': return_date,
-            'is_available': not overlapping,
             'message': 'Car is available' if not overlapping else 'Car is not available for selected dates'
         })
+    
+    @action(detail=True, methods=['get'])
+    def images(self, request, pk=None):
+        """Get all images for a specific car"""
+        car = self.get_object()
+        images = []
+        
+        if car.images:
+            for image in car.images:
+                image_url = image.url if hasattr(image, 'url') else str(image)
+                images.append(request.build_absolute_uri(image_url))
+        
+        return Response({
+            'car_id': car.id,
+            'car_name': car.name,
+            'primary_image': request.build_absolute_uri(car.image.url) if car.image else None,
+            'images': images,
+            'total_images': len(images)
+        })
+    
+    @action(detail=False, methods=['get'])
+    def featured(self, request):
+        """Get featured/top-rated cars"""
+        cars = Car.objects.filter(available=True).order_by('-rating')[:10]
+        serializer = CarSerializer(cars, many=True, context={'request': request})
+        return Response(serializer.data)
 
 
 # ============================================================================
@@ -420,12 +396,10 @@ class BookingViewSet(viewsets.ModelViewSet):
     """
     Booking management
     
-    list: Get user's bookings (all for admin)
-    create: Create new booking
+    list: Get user's bookings
+    create: Make a new booking
     retrieve: Get booking details
-    update_status: Update booking status (admin only)
-    cancel: Cancel booking
-    mpesa_callback: Handle M-Pesa webhook
+    update/destroy: Admin/owner only
     """
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
@@ -433,7 +407,7 @@ class BookingViewSet(viewsets.ModelViewSet):
     ordering_fields = ['-created_at', 'pickup_date']
     
     def get_queryset(self):
-        """Filter bookings - admins see all, users see only their own"""
+        """Return user's bookings or all if admin"""
         user = self.request.user
         if user.profile.role in ['admin', 'super_admin']:
             return Booking.objects.all()
@@ -442,82 +416,49 @@ class BookingViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'create':
             return BookingCreateSerializer
-        elif self.action == 'mpesa_callback':
-            return MpesaWebhookSerializer
         elif self.action == 'retrieve':
             return BookingDetailSerializer
+        elif self.action == 'update_status':
+            return BookingUpdateStatusSerializer
         return BookingSerializer
     
     def get_permissions(self):
-        if self.action == 'create':
-            permission_classes = [permissions.IsAuthenticated]
-        elif self.action in ['update_status', 'update', 'partial_update']:
+        if self.action in ['update', 'partial_update', 'destroy']:
             permission_classes = [IsBookingOwnerOrAdmin]
-        elif self.action == 'destroy':
-            permission_classes = [IsAdmin]
-        elif self.action == 'mpesa_callback':
-            permission_classes = [permissions.AllowAny]  # Webhook from M-Pesa
         else:
             permission_classes = [permissions.IsAuthenticated]
         return [permission() for permission in permission_classes]
     
     def create(self, request, *args, **kwargs):
-        """Create booking with validation"""
+        """Create a new booking"""
         serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
-        return Response(
-            BookingDetailSerializer(serializer.instance).data,
-            status=status.HTTP_201_CREATED
-        )
+        return Response(BookingSerializer(serializer.instance).data, status=status.HTTP_201_CREATED)
     
-    @action(detail=True, methods=['patch'], permission_classes=[IsBookingOwnerOrAdmin])
+    @action(detail=True, methods=['patch'], permission_classes=[IsAdmin])
     def update_status(self, request, pk=None):
-        """Update booking status (admin)"""
+        """Update booking status (admin only)"""
         booking = self.get_object()
         serializer = BookingUpdateStatusSerializer(booking, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(BookingDetailSerializer(booking).data)
     
-    @action(detail=True, methods=['patch'], permission_classes=[IsBookingOwnerOrAdmin])
-    def cancel(self, request, pk=None):
-        """Cancel a booking"""
+    @action(detail=True, methods=['patch'], permission_classes=[permissions.IsAuthenticated])
+    def mpesa_webhook(self, request, pk=None):
+        """Handle M-Pesa payment webhook"""
         booking = self.get_object()
         
-        if booking.status in ['completed', 'cancelled']:
+        if booking.profile.user != request.user and not (
+            request.user.is_authenticated and request.user.profile.role in ['admin', 'super_admin']
+        ):
             return Response(
-                {'error': f'Cannot cancel booking with status {booking.status}'},
-                status=status.HTTP_400_BAD_REQUEST
+                {'error': 'Not authorized'},
+                status=status.HTTP_403_FORBIDDEN
             )
         
-        booking.status = 'cancelled'
-        booking.save()
-        
-        return Response(
-            BookingDetailSerializer(booking).data,
-            status=status.HTTP_200_OK
-        )
-    
-    @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
-    def mpesa_callback(self, request):
-        """
-        Handle M-Pesa payment webhook
-        
-        Expected payload:
-        {
-            "checkout_request_id": "...",
-            "facilitator_checkout_id": "...",
-            "mpesa_receipt_number": "...",
-            "mpesa_phone": "...",
-            "paid_amount": 5000,
-            "mpesa_transaction_date": "20240101120000"
-        }
-        """
-        try:
-            checkout_request_id = request.data.get('checkout_request_id')
-            booking = Booking.objects.get(checkout_request_id=checkout_request_id)
-        except Booking.DoesNotExist:
+        if not booking:
             return Response(
                 {'error': 'Booking not found'},
                 status=status.HTTP_404_NOT_FOUND

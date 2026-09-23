@@ -5,6 +5,7 @@ from django.contrib.auth.models import (
     BaseUserManager,
     PermissionsMixin,
 )
+from django.contrib.postgres.fields import ArrayField
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models.signals import post_save
@@ -124,8 +125,12 @@ class Car(models.Model):
     price = models.DecimalField(max_digits=10, decimal_places=2)
     rating = models.DecimalField(max_digits=3, decimal_places=1, default=0.0)
     reviews = models.IntegerField(default=0)
-    image = models.URLField(null=True, blank=True)  # Primary image
-    images = models.JSONField(default=list, blank=True)  # Array of image URLs
+    image = models.ImageField(upload_to='cars/', null=True, blank=True)  # Primary image
+    images = ArrayField(
+        models.ImageField(upload_to='cars/'),
+        default=list,
+        blank=True
+    )  # Array of car images
     car_type = models.CharField(max_length=20, choices=CAR_TYPE_CHOICES, null=True, blank=True)
     seats = models.IntegerField()
     transmission = models.CharField(max_length=20, choices=TRANSMISSION_CHOICES)
@@ -233,6 +238,9 @@ class Review(models.Model):
     
     def __str__(self):
         return f"Review: {self.car.name} - {self.rating}/5 by {self.profile.full_name}"
+
+
+from django.contrib.postgres.fields import ArrayField
 
 
 class GalleryEvent(models.Model):

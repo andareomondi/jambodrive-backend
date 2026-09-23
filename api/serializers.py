@@ -151,15 +151,44 @@ class ProfileDetailSerializer(ProfileSerializer):
 
 class CarSerializer(serializers.ModelSerializer):
     """Basic car serializer for listings"""
+    # Convert ImageField URLs to full paths
+    primary_image = serializers.SerializerMethodField()
+    car_images = serializers.SerializerMethodField()
     
     class Meta:
         model = Car
         fields = [
             'id', 'name', 'model', 'year', 'price', 'rating', 'reviews',
-            'image', 'images', 'car_type', 'seats', 'transmission',
-            'fuel', 'features', 'available' , 'chauffered'
+            'primary_image', 'car_images', 'car_type', 'seats', 'transmission',
+            'fuel', 'features', 'available', 'chauffered'
         ]
         read_only_fields = ['id', 'rating', 'reviews']
+    
+    def get_primary_image(self, obj):
+        """Get primary image URL"""
+        request = self.context.get('request')
+        if obj.image:
+            image_url = obj.image.url
+            if request:
+                return request.build_absolute_uri(image_url)
+            return image_url
+        return None
+    
+    def get_car_images(self, obj):
+        """Get all car image URLs"""
+        request = self.context.get('request')
+        images = []
+        
+        if obj.images:
+            for image in obj.images:
+                if image:
+                    image_url = image.url if hasattr(image, 'url') else str(image)
+                    if request:
+                        images.append(request.build_absolute_uri(image_url))
+                    else:
+                        images.append(image_url)
+        
+        return images
 
 
 class CarDetailSerializer(CarSerializer):
@@ -195,6 +224,49 @@ class CarAvailabilitySerializer(serializers.Serializer):
                 "Pickup date cannot be in the past"
             )
         return data
+
+
+class CarCreateUpdateSerializer(serializers.ModelSerializer):
+    """Create/update car with images (admin only)"""
+    images = serializers.ListField(
+        child=serializers.ImageField(max_length=None),
+        allow_empty=True,
+        required=False
+    )
+    
+    class Meta:
+        model = Car
+        fields = [
+            'name', 'model', 'year', 'price', 'image', 'images',
+            'car_type', 'seats', 'transmission', 'fuel',
+            'fuel_consumption', 'features', 'description',
+            'available', 'chauffered'
+        ]
+    
+    def create(self, validated_data):
+        """Create car and handle image uploads"""
+        images = validated_data.pop('images', [])
+        car = Car.objects.create(**validated_data)
+        
+        # Store images paths in ArrayField
+        if images:
+            car.images = [img for img in images]
+            car.save()
+        
+        return car
+    
+    def update(self, instance, validated_data):
+        """Update car and handle image uploads"""
+        images = validated_data.pop('images', None)
+        
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        if images is not None:
+            instance.images = [img for img in images]
+        
+        instance.save()
+        return instance
 
 
 # ============================================================================
